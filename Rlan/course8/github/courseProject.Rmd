@@ -1,0 +1,230 @@
+---
+title: "Couse 8 Project Quantified Self Movement"
+author: "Autoz"
+date: "2018.1.9"
+output:
+  html_document: default
+  pdf_document: default
+---
+# Introduction
+
+One thing that people regularly do is quantify
+how much of a particular activity they do,
+but they rarely quantify how well they do it.
+In this project, your goal will be to use data
+from accelerometers on the belt, forearm, arm,
+and dumbell of 6 participants. With Following Steps,
+
+`1 fit model`
+
+`2 cross validation`
+
+`3 sample errors`
+
+`4 make choices`
+
+`5 predict 20 test case`
+
+# Load Data
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(tidyverse)
+
+training_raw <- read_csv("pml-training.csv",na = c("NA","#DIV/0!",""))
+testing_raw <- read_csv("pml-testing.csv",na = c("NA","#DIV/0!",""))
+training_raw <- as.data.frame(training_raw)
+testing_raw <- as.data.frame(testing_raw)
+```
+
+
+# Cleaning the Training Data
+
+<!-- Clean Data -->
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+training_raw$classe <- factor(training_raw$classe)
+```
+
+
+# Remove columns with more than 70% of NA or "" values
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+NArate <- function(x){
+    apply(x, 2, function(y) sum(is.na(y)))/nrow(x)
+}
+
+training_raw <- training_raw[,NArate(training_raw) < .7]
+```
+
+
+# Remove near zero variances
+
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(caret)
+nzvCol <- nearZeroVar(training_raw, saveMetrics = TRUE)
+training_raw <- training_raw[, !nzvCol$nzv]
+```
+
+
+# Remove unused variables
+
+
+```{r}
+training_raw <- training_raw[,-grep("name|timestamp|window|^X",names(training_raw))]
+
+```
+
+
+# Impute all NAs
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(mice)
+imp <- mice(training_raw,seed = 3)
+training_raw <- mice::complete(imp)
+
+```
+
+
+# Remove 75% highly Correlative Variables  
+
+```{r}
+trainingNC <- training_raw[, -length(names(training_raw))]
+
+findcor <- findCorrelation(cor(trainingNC,use="complete.obs"), cutoff = .75)
+
+trainingFiltered <- training_raw[,-findcor]
+trainingFilteredNC <- trainingNC[,-findcor]
+
+```
+
+<!-- Clean Data End -->
+
+# Cross validation
+
+```{r}
+inTrain <- createDataPartition(y = trainingFiltered$classe, p = 0.75, 
+                               list = FALSE) # 75% training
+training <- trainingFiltered[inTrain,]
+testing <- trainingFiltered[-inTrain,]
+
+```
+
+# Model Evaluation
+
+# Regression Tree
+
+```{r warning=FALSE}
+library(rpart)
+system.time(mod_rpart <- rpart(formula = classe ~ ., data = training))
+predict_rpart <- predict(mod_rpart,newdata = testing,
+                         type = "class")
+confusionMatrix(predict_rpart,testing$classe)
+```
+
+
+# C50 Tree
+
+```{r warning=FALSE}
+library(C50)
+system.time(mod_C50 <- C5.0(formula = classe ~ ., data = training))
+predict_C50 <- predict(mod_C50,newdata = testing)
+confusionMatrix(predict_C50,testing$classe)
+
+```
+
+# SVM
+
+```{r warning=FALSE}
+library(kernlab)
+library(e1071)
+system.time(mod_svm <- svm(formula = classe ~ ., data = training,
+                           kernel = "linear",cost = 10))
+predict_svm <- predict(mod_svm,newdata = testing)
+confusionMatrix(predict_svm,testing$classe)
+```
+
+
+# Random forest
+
+```{r warning=FALSE,cache = TRUE}
+library(randomForest)
+system.time(modrf <- randomForest(formula = classe ~ ., data = training))
+predict_rf <- predict(modrf,newdata = testing)
+confusionMatrix(predict_rf,testing$classe)
+```
+
+
+# Model verification
+
+Using parallel acceleration because it's very consuming time in caret Random forest.
+
+# Use Parallel CPU
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+
+# CV Random forest
+
+```{r cache = TRUE}
+set.seed(33)
+fitControl <- trainControl(method = "cv",
+                           number = 2,
+                           classProbs = T,
+                           preProcOptions = c("pca"),
+                           verboseIter = T,
+                           allowParallel = T)
+
+system.time(mod_rf <- train(classe ~ ., data = training,
+                            trControl = fitControl,
+                            preProcess = c("center", "scale"),
+                            method = "rf"))
+
+predict_rf <- predict(mod_rf,newdata = testing)
+
+confusionMatrix(predict_rf,testing$classe)
+
+```
+
+
+# Stop Parallel
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+
+```
+
+# Final Result, Predict 20 Cases
+```{r}
+(final_result <- predict(modrf, testing_raw))
+```
+
+# Conclutions
+
+Ramdon Forest Accuracy is 0.9927 and the best fit model of this case. So we choose Ramdon Forest to predict 20 cases.
+
+# Appendix 
+
+# Training Data Corrplot 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(corrplot)
+corrplot(cor(trainingNC,use="complete.obs"), method = "color", tl.cex = 0.5)
+corrplot(cor(trainingFilteredNC,use="complete.obs"), method = "color", tl.cex = 0.5)
+```
+
+# Regression Tree Plot
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(rpart.plot)
+prp(mod_rpart, extra=1, uniform=F, branch=1, yesno=F, border.col=0, xsep="/")
+rpart.plot(mod_rpart, type=4, extra=0, branch.lty=3, box.palette = "auto",
+           cex = .82)
+```
+
+
